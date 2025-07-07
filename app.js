@@ -16,15 +16,10 @@ app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
 
 // Configure AWS S3
-AWS.config.update({
+const s3 = new AWS.S3({
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   region: process.env.AWS_REGION || "us-east-1",
-});
-
-const s3 = new AWS.S3({
-  apiVersion: "2006-03-01",
-  signatureVersion: "v4",
 });
 
 // Multer configuration for S3 uploads
@@ -33,9 +28,6 @@ const upload = multer({
     s3: s3,
     bucket: process.env.S3_BUCKET_NAME,
     acl: "public-read",
-    metadata: function (req, file, cb) {
-      cb(null, { fieldName: file.fieldname });
-    },
     key: function (req, file, cb) {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
       const filename =
@@ -57,7 +49,6 @@ const upload = multer({
 
 // Database configuration
 const mysql = require("mysql2/promise");
-const fs = require("fs");
 
 const dbConfig = {
   host: process.env.DB_HOST,
@@ -175,7 +166,7 @@ function authenticate(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.userId = decoded.id; // Add the user's ID to the request object
+    req.userId = decoded.id;
     next();
   } catch (error) {
     return res.status(401).json({ error: "Invalid or expired token" });
@@ -235,7 +226,17 @@ app.get("/api/posts/:id", async (req, res) => {
 app.post(
   "/api/posts",
   authenticate,
-  upload.single("image"),
+  (req, res, next) => {
+    upload.single("image")(req, res, (err) => {
+      if (err) {
+        console.error("Upload error:", err);
+        return res
+          .status(400)
+          .json({ error: "Image upload failed: " + err.message });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       const { title, content } = req.body;
@@ -246,7 +247,6 @@ app.post(
           .json({ error: "Title and content are required" });
       }
 
-      // Handle image URL - use S3 location if file uploaded, otherwise use provided URL or null
       let imageUrl = null;
       if (req.file) {
         imageUrl = req.file.location;
@@ -284,7 +284,17 @@ app.post(
 app.put(
   "/api/posts/:id",
   authenticate,
-  upload.single("image"),
+  (req, res, next) => {
+    upload.single("image")(req, res, (err) => {
+      if (err) {
+        console.error("Upload error:", err);
+        return res
+          .status(400)
+          .json({ error: "Image upload failed: " + err.message });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       const { title, content } = req.body;
@@ -308,14 +318,16 @@ app.put(
       let imageUrl = postToUpdate.image_url;
 
       // If new image is uploaded, delete old image from S3 and use new one
-      if (req.file) {
+      if (req.file && req.file.location) {
         // Delete old image from S3 if it exists
-        if (postToUpdate.image_url) {
+        if (
+          postToUpdate.image_url &&
+          postToUpdate.image_url.includes("amazonaws.com")
+        ) {
           await deleteImageFromS3(postToUpdate.image_url);
         }
-        imageUrl = req.file.location; // Use new S3 URL
-      } else if (req.body.imageUrl) {
-        // If imageUrl is provided in body, use it
+        imageUrl = req.file.location;
+      } else if (req.body.imageUrl !== undefined) {
         imageUrl = req.body.imageUrl;
       }
 
@@ -368,7 +380,7 @@ app.delete("/api/posts/:id", authenticate, async (req, res) => {
     const post = posts[0];
 
     // Delete image from S3 if it exists
-    if (post.image_url) {
+    if (post.image_url && post.image_url.includes("amazonaws.com")) {
       await deleteImageFromS3(post.image_url);
     }
 
@@ -439,7 +451,7 @@ app.post("/api/auth/login", async (req, res) => {
     const token = jwt.sign(
       { id: user.id, username: user.username, email: user.email },
       JWT_SECRET,
-      { expiresIn: "1h" } // Token expires in 1 hour
+      { expiresIn: "1h" }
     );
 
     res.json({
