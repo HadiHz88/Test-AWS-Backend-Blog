@@ -22,25 +22,28 @@ AWS.config.update({
   region: process.env.AWS_REGION || "us-east-1",
 });
 
-const s3 = new AWS.S3();
+const s3 = new AWS.S3({
+  apiVersion: "2006-03-01",
+  signatureVersion: "v4",
+});
 
 // Multer configuration for S3 uploads
 const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.S3_BUCKET_NAME,
-    acl: "public-read", // Make files publicly readable
+    acl: "public-read",
+    metadata: function (req, file, cb) {
+      cb(null, { fieldName: file.fieldname });
+    },
     key: function (req, file, cb) {
-      // Generate unique filename with timestamp
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
       const filename =
         file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname);
       cb(null, `blog-images/${filename}`);
     },
-    contentType: multerS3.AUTO_CONTENT_TYPE, // Automatically detect content type
   }),
   fileFilter: function (req, file, cb) {
-    // Only allow image files
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
@@ -48,7 +51,7 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB file size limit
+    fileSize: 5 * 1024 * 1024, // 5MB limit
   },
 });
 
@@ -141,12 +144,11 @@ async function initializeDatabase() {
 async function deleteImageFromS3(imageUrl) {
   try {
     if (!imageUrl || !imageUrl.includes("amazonaws.com")) {
-      return; // Not an S3 URL
+      return;
     }
 
-    // Extract key from S3 URL
     const urlParts = imageUrl.split("/");
-    const key = urlParts.slice(-2).join("/"); // Gets 'blog-images/filename'
+    const key = urlParts.slice(-2).join("/");
 
     const params = {
       Bucket: process.env.S3_BUCKET_NAME,
@@ -237,14 +239,19 @@ app.post(
   async (req, res) => {
     try {
       const { title, content } = req.body;
-      const imageUrl = req.file
-        ? req.file.location // S3 URL from multer-s3
-        : req.body.imageUrl;
 
       if (!title || !content) {
         return res
           .status(400)
           .json({ error: "Title and content are required" });
+      }
+
+      // Handle image URL - use S3 location if file uploaded, otherwise use provided URL or null
+      let imageUrl = null;
+      if (req.file) {
+        imageUrl = req.file.location;
+      } else if (req.body.imageUrl) {
+        imageUrl = req.body.imageUrl;
       }
 
       const [result] = await pool.execute(
