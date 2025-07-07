@@ -5,6 +5,8 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const path = require("path");
+const AWS = require("aws-sdk");
+const multerS3 = require("multer-s3");
 require("dotenv").config();
 
 const app = express();
@@ -13,23 +15,42 @@ const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-key";
 app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
 
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
-  },
-  filename: function (req, file, cb) {
-    cb(
-      null,
-      file.fieldname + "-" + Date.now() + path.extname(file.originalname)
-    );
-  },
+// Configure AWS S3
+AWS.config.update({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION || "us-east-1",
 });
 
-const upload = multer({ storage: storage });
+const s3 = new AWS.S3();
 
-// Serve static files from the uploads directory
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Multer configuration for S3 uploads
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    acl: "public-read", // Make files publicly readable
+    key: function (req, file, cb) {
+      // Generate unique filename with timestamp
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const filename =
+        file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname);
+      cb(null, `blog-images/${filename}`);
+    },
+    contentType: multerS3.AUTO_CONTENT_TYPE, // Automatically detect content type
+  }),
+  fileFilter: function (req, file, cb) {
+    // Only allow image files
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
+  },
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB file size limit
+  },
+});
 
 // Database configuration
 const mysql = require("mysql2/promise");
@@ -41,13 +62,6 @@ const dbConfig = {
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
   port: process.env.DB_PORT || 3306,
-  //   ssl:
-  //     process.env.DB_SSL_ENABLED === "true"
-  //       ? {
-  //           ca: fs.readFileSync(process.env.DB_SSL_CA),
-  //           rejectUnauthorized: true,
-  //         }
-  //       : null,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -57,12 +71,6 @@ let pool;
 
 async function initializeDatabase() {
   try {
-    // Create uploads directory if it doesn't exist
-    const uploadsDir = path.join(__dirname, "uploads");
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-
     pool = mysql.createPool(dbConfig);
 
     // Create database if it doesn't exist
@@ -126,6 +134,29 @@ async function initializeDatabase() {
     console.log("Database initialized successfully");
   } catch (error) {
     console.error("Database initialization error:", error);
+  }
+}
+
+// Function to delete image from S3
+async function deleteImageFromS3(imageUrl) {
+  try {
+    if (!imageUrl || !imageUrl.includes("amazonaws.com")) {
+      return; // Not an S3 URL
+    }
+
+    // Extract key from S3 URL
+    const urlParts = imageUrl.split("/");
+    const key = urlParts.slice(-2).join("/"); // Gets 'blog-images/filename'
+
+    const params = {
+      Bucket: process.env.S3_BUCKET_NAME,
+      Key: key,
+    };
+
+    await s3.deleteObject(params).promise();
+    console.log(`Successfully deleted ${key} from S3`);
+  } catch (error) {
+    console.error("Error deleting image from S3:", error);
   }
 }
 
@@ -207,7 +238,7 @@ app.post(
     try {
       const { title, content } = req.body;
       const imageUrl = req.file
-        ? `/uploads/${req.file.filename}`
+        ? req.file.location // S3 URL from multer-s3
         : req.body.imageUrl;
 
       if (!title || !content) {
@@ -267,9 +298,19 @@ app.put(
       }
 
       const postToUpdate = posts[0];
-      const imageUrl = req.file
-        ? `/uploads/${req.file.filename}`
-        : req.body.imageUrl || postToUpdate.image_url;
+      let imageUrl = postToUpdate.image_url;
+
+      // If new image is uploaded, delete old image from S3 and use new one
+      if (req.file) {
+        // Delete old image from S3 if it exists
+        if (postToUpdate.image_url) {
+          await deleteImageFromS3(postToUpdate.image_url);
+        }
+        imageUrl = req.file.location; // Use new S3 URL
+      } else if (req.body.imageUrl) {
+        // If imageUrl is provided in body, use it
+        imageUrl = req.body.imageUrl;
+      }
 
       await pool.execute(
         `
@@ -315,6 +356,13 @@ app.delete("/api/posts/:id", authenticate, async (req, res) => {
       return res
         .status(404)
         .json({ error: "Post not found or not authorized" });
+    }
+
+    const post = posts[0];
+
+    // Delete image from S3 if it exists
+    if (post.image_url) {
+      await deleteImageFromS3(post.image_url);
     }
 
     await pool.execute("DELETE FROM posts WHERE id = ?", [postId]);
