@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const path = require("path");
-const AWS = require("aws-sdk");
+const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const multerS3 = require("multer-s3");
 require("dotenv").config();
 
@@ -15,17 +15,19 @@ const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-key";
 app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
 
-// Configure AWS S3
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+// Configure AWS S3 with SDK v3
+const s3Client = new S3Client({
   region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
 });
 
 // Multer configuration for S3 uploads
 const upload = multer({
   storage: multerS3({
-    s3: s3,
+    s3: s3Client,
     bucket: process.env.S3_BUCKET_NAME,
     acl: "public-read",
     key: function (req, file, cb) {
@@ -131,7 +133,7 @@ async function initializeDatabase() {
   }
 }
 
-// Function to delete image from S3
+// Function to delete image from S3 using AWS SDK v3
 async function deleteImageFromS3(imageUrl) {
   try {
     if (!imageUrl || !imageUrl.includes("amazonaws.com")) {
@@ -141,12 +143,12 @@ async function deleteImageFromS3(imageUrl) {
     const urlParts = imageUrl.split("/");
     const key = urlParts.slice(-2).join("/");
 
-    const params = {
+    const command = new DeleteObjectCommand({
       Bucket: process.env.S3_BUCKET_NAME,
       Key: key,
-    };
+    });
 
-    await s3.deleteObject(params).promise();
+    await s3Client.send(command);
     console.log(`Successfully deleted ${key} from S3`);
   } catch (error) {
     console.error("Error deleting image from S3:", error);

@@ -11,7 +11,8 @@
   "type": "commonjs",
   "description": "",
   "dependencies": {
-    "aws-sdk": "^2.1490.0",
+    "@aws-sdk/client-s3": "^3.842.0",
+    "@aws-sdk/lib-storage": "^3.842.0",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.0.1",
