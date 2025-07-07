@@ -18,6 +18,13 @@ app.use(bodyParser.json({ limit: "10mb" }));
 // Configure AWS S3 with SDK v3
 const s3Client = new S3Client({
   region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  },
+  // Add retry options
+  maxAttempts: 3,
+  retryMode: "standard",
 });
 
 // Multer configuration for S3 uploads
@@ -25,7 +32,6 @@ const upload = multer({
   storage: multerS3({
     s3: s3Client,
     bucket: process.env.S3_BUCKET_NAME,
-    acl: "public-read",
     key: function (req, file, cb) {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
       const filename =
