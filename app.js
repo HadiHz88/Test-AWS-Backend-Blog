@@ -67,68 +67,59 @@ let pool;
 
 async function initializeDatabase() {
   try {
+    console.log("Initializing database...");
     pool = mysql.createPool(dbConfig);
 
-    // Create database if it doesn't exist
-    await Promise.race([
-      pool.getConnection(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("DB connection timed out")), 5000)
-      ),
-    ]);
+    const connection = await pool.getConnection();
 
     await connection.query("CREATE DATABASE IF NOT EXISTS blog_db");
 
-    // Create users table
     await connection.execute(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(255) UNIQUE NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+        CREATE TABLE IF NOT EXISTS users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          username VARCHAR(255) UNIQUE NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
-    // Create posts table
     await connection.execute(`
-      CREATE TABLE IF NOT EXISTS posts (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        title VARCHAR(255) NOT NULL,
-        content TEXT NOT NULL,
-        image_url VARCHAR(500),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `);
+        CREATE TABLE IF NOT EXISTS posts (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          content TEXT NOT NULL,
+          image_url VARCHAR(500),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+      `);
 
-    // Create some sample data
     const [users] = await connection.execute(
       "SELECT COUNT(*) as count FROM users"
     );
+
     if (users[0].count === 0) {
-      // Insert sample users
       await connection.execute(
         `
-        INSERT INTO users (username, email, password_hash) VALUES
-        ('john_doe', 'john@example.com', ?),
-        ('jane_smith', 'jane@example.com', ?)
-      `,
+          INSERT INTO users (username, email, password_hash) VALUES
+          ('john_doe', 'john@example.com', ?),
+          ('jane_smith', 'jane@example.com', ?)
+        `,
         [
           crypto.createHash("sha256").update("password123").digest("hex"),
           crypto.createHash("sha256").update("password123").digest("hex"),
         ]
       );
 
-      // Insert sample posts
       await connection.execute(`
-        INSERT INTO posts (user_id, title, content, image_url) VALUES
-        (1, 'Welcome to My Blog', 'This is my first blog post! I am excited to share my thoughts with you.', 'https://via.placeholder.com/600x400'),
-        (1, 'Learning AWS', 'Today I learned about AWS services like EC2, RDS, and Lambda. It has been an amazing journey!', 'https://via.placeholder.com/600x400'),
-        (2, 'Hello World', 'Just getting started with blogging. Looking forward to sharing more content!', 'https://via.placeholder.com/600x400')
-      `);
+          INSERT INTO posts (user_id, title, content) VALUES
+          (1, 'Welcome to My Blog', 'This is my first blog post!'),
+          (1, 'Learning AWS', 'Today I learned about AWS services like EC2, RDS, and Lambda. It has been an amazing journey!'),
+          (2, 'Hello World', 'Just getting started with blogging. Looking forward to sharing more content!')
+        `);
     }
 
     connection.release();
