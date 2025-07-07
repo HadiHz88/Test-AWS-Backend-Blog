@@ -70,9 +70,14 @@ async function initializeDatabase() {
     pool = mysql.createPool(dbConfig);
 
     // Create database if it doesn't exist
-    const connection = await pool.getConnection();
-    await connection.execute("CREATE DATABASE IF NOT EXISTS blog_db");
-    await connection.query("USE blog_db");
+    await Promise.race([
+      pool.getConnection(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("DB connection timed out")), 5000)
+      ),
+    ]);
+
+    await connection.query("CREATE DATABASE IF NOT EXISTS blog_db");
 
     // Create users table
     await connection.execute(`
@@ -466,8 +471,10 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+console.log("Initializing database...");
 initializeDatabase().then(() => {
   const PORT = process.env.PORT || 3000;
+  console.log("Database initialized, starting server...");
   app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });
